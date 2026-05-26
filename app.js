@@ -90,9 +90,13 @@ function loginErrorMessage(error){
 async function login(){
   const username=$("#loginUsername").value.trim();
   const password=$("#loginPassword").value;
-  if(window.HPH_USE_SUPABASE&&window.HPHSupabase){
+
+  if(window.HPH_USE_SUPABASE){
     try{
       $("#loginError").classList.add("hidden");
+      if(!window.HPHSupabase){
+        throw new Error("Online login module did not load. Make sure storage.js is uploaded and browser cache is cleared.");
+      }
       await HPHSupabase.ensureReady();
       const profile=await HPHSupabase.signIn(username,password);
       state.onlineMode=true;
@@ -114,6 +118,7 @@ async function login(){
       return;
     }
   }
+
   const user=state.data.users.find(u=>u.username===username&&u.password===password&&u.role===state.selectedRole);
   if(!user){$("#loginError").textContent="Incorrect username/email or password.";$("#loginError").classList.remove("hidden");return}
   $("#loginError").classList.add("hidden");state.onlineMode=false;state.currentUser=user;$("#loginView").classList.add("hidden");$("#mainView").classList.remove("hidden");$("#activeUsername").textContent=user.username;$("#activeRole").textContent=user.role;$$('.admin-only').forEach(item=>item.classList.toggle("hidden",user.role!=="admin"));goPage("dashboard");saveSession()

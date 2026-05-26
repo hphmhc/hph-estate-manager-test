@@ -14,7 +14,7 @@
         <h1>HPH Estate Manager</h1>
         <p class="muted">Real estate records, projects, clients and backups.</p>
 
-        <div class="login-tabs" role="tablist" aria-label="Login role">
+        <div class="login-tabs hidden" role="tablist" aria-label="Login role">
           <button id="roleUserBtn" class="role-tab active" type="button" data-role="user">User</button>
           <button id="roleAdminBtn" class="role-tab" type="button" data-role="admin">Admin</button>
         </div>
@@ -25,13 +25,11 @@
         <label>Password</label>
         <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter password" />
 
-        <p id="loginError" class="error hidden">Invalid username, password, or role.</p>
+        <p id="loginError" class="error hidden">Incorrect username/email or password.</p>
         <button id="loginBtn" class="btn primary full" type="button">Sign in</button>
 
         <div class="credentials-note">
-          <strong>Demo logins:</strong><br />
-          Local demo: admin / admin123<br />
-          Online: use your Supabase username or email/password
+          Online login: use your Supabase username or email and password.
         </div>
       </div>
     </section>
