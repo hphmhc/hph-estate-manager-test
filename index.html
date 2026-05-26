@@ -19,8 +19,8 @@
           <button id="roleAdminBtn" class="role-tab" type="button" data-role="admin">Admin</button>
         </div>
 
-        <label>Username</label>
-        <input id="loginUsername" type="text" autocomplete="username" placeholder="Enter username" />
+        <label>Username or Email</label>
+        <input id="loginUsername" type="text" autocomplete="username" placeholder="Enter username or email" />
 
         <label>Password</label>
         <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter password" />
@@ -30,8 +30,8 @@
 
         <div class="credentials-note">
           <strong>Demo logins:</strong><br />
-          Admin: admin / admin123<br />
-          User: user / user123
+          Local demo: admin / admin123<br />
+          Online: use your Supabase username or email/password
         </div>
       </div>
     </section>
@@ -117,7 +117,7 @@
             <select id="plotAvailabilityFilter"><option value="all">All plots</option><option value="available">Available plots</option><option value="sold">Sold plots</option></select>
           </div>
           <div class="panel"><div class="table-wrap"><table>
-            <thead><tr><th>Plot #</th><th>Project</th><th>Intikal</th><th>Size</th><th>Measurements</th><th>Type</th><th>Availability</th><th>Payment</th><th>Linked Client</th><th>Price</th><th class="actions-col">Actions</th></tr></thead>
+            <thead><tr><th>Plot #</th><th>Project</th><th>Intikal</th><th>Size</th><th>Khasra #</th><th>Khatauni #</th><th>Transferred From</th><th>Type</th><th>Availability</th><th>Payment</th><th>Linked Client</th><th>Price</th><th class="actions-col">Actions</th></tr></thead>
             <tbody id="plotsTableBody"></tbody>
           </table></div></div>
         </section>
@@ -362,8 +362,9 @@
           <label>Plot Number *<input id="plotNo" required type="text" placeholder="B-44" /></label>
           <label>Intikal Number<input id="plotIntikalNo" type="text" placeholder="Optional" /></label>
           <label>Plot Size<div class="inline-fields"><input id="plotSize" type="number" min="0" step="0.01" placeholder="Size" /><select id="plotUnit"><option value="Kanal">Kanal</option><option value="Marla">Marla</option><option value="Yards">Yards</option></select></div><small id="plotSizePreview" class="hint"></small></label>
-          <label>Plot Shape<select id="plotShape"><option value="four-sided">Four-sided plot</option><option value="three-sided">Three-sided plot</option></select></label>
-          <label>Measurements<input id="plotMeasurements" type="text" placeholder="35 x 25 or 35 x 25 x 45" /></label>
+          <label>Khasra Number<input id="plotKhasraNo" type="text" placeholder="e.g. 125/7" /></label>
+          <label>Khatauni Number<input id="plotKhatauniNo" type="text" placeholder="e.g. 48" /></label>
+          <label class="full">Transferred From<input id="plotTransferredFrom" type="text" placeholder="Previous owner / transfer source" /></label>
           <label>Property Type<select id="plotPropertyType"><option value="Residential">Residential</option><option value="Commercial">Commercial</option></select></label>
           <label>Construction Status<select id="plotConstructionStatus"><option value="plot">Plot</option><option value="constructed">Constructed</option></select></label>
           <label>Availability<select id="plotAvailabilityStatus"><option value="available">Available</option><option value="sold">Sold</option></select></label>
@@ -460,6 +461,6 @@
     </div>
 
   </div>
-  <script src="storage.js"></script><script src="exports.js"></script><script src="documents.js"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="storage.js"></script><script src="exports.js"></script><script src="documents.js"></script><script src="app.js"></script>
 </body>
 </html>

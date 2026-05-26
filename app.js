@@ -1,7 +1,7 @@
-const state={data:HPHStorage.load(),currentUser:null,selectedRole:"user",activePage:"dashboard",activePaymentClientId:null,activePaymentPlotId:null,activeDueClientId:null,activeDuePlotId:null};
+const state={data:HPHStorage.load(),currentUser:null,selectedRole:"user",activePage:"dashboard",activePaymentClientId:null,activePaymentPlotId:null,activeDueClientId:null,activeDuePlotId:null,onlineMode:false,remoteSaveTimer:null};
 const $=selector=>document.querySelector(selector);
 const $$=selector=>Array.from(document.querySelectorAll(selector));
-function uid(prefix="id"){return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`}
+function uid(prefix="id"){return window.HPH_USE_SUPABASE&&window.crypto?.randomUUID?window.crypto.randomUUID():`${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`}
 function escapeHtml(value){return String(value??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
 function formatMoney(value){return Number(value||0).toLocaleString("en-PK")}
 function formatDate(value){if(!value)return "-";try{return new Date(value).toLocaleDateString("en-GB")}catch(e){return String(value).slice(0,10)||"-"}}
@@ -28,14 +28,41 @@ function clientAggregate(client){const plots=getClientPlots(client.id);if(!plots
 const sorted=sortPlotsList(plots);const total=sorted.reduce((sum,p)=>sum+Number(p.price||0),0);const received=sorted.reduce((sum,p)=>sum+Number(p.amountReceived||0),0);const remaining=Math.max(0,total-received);return {plots:sorted,plotLabels:sorted.map(p=>p.plotNo).filter(Boolean),projectLabels:[...new Set(sorted.map(p=>p.projectName).filter(Boolean))],sizeLabels:[...new Set(sorted.map(p=>`${p.plotSizeMarla||0} marla`))],typeLabels:[...new Set(sorted.map(p=>p.propertyType).filter(Boolean))],constructionStatuses:[...new Set(sorted.map(p=>p.constructionStatus).filter(Boolean))],paymentStatuses:[...new Set(sorted.map(p=>normalizePaymentStatus(p.paymentStatus)).filter(Boolean))],total,received,remaining}}
 function aggregatePaymentStatusLabel(statuses){const unique=[...new Set((statuses||[]).map(normalizePaymentStatus))];if(!unique.length)return "-";if(unique.length===1)return paymentStatusLabel(unique[0]);return unique.map(paymentStatusLabel).join(" / ")}
 function aggregateConstructionStatusLabel(statuses){const unique=[...new Set((statuses||[]).filter(Boolean))];if(!unique.length)return "-";if(unique.length===1)return constructionStatusLabel(unique[0]);return unique.map(constructionStatusLabel).join(" / ")}
-function saveData(){state.data=HPHStorage.save(state.data)}
+function scheduleRemoteSave(){
+  if(!state.onlineMode||!window.HPHSupabase?.ready)return;
+  clearTimeout(state.remoteSaveTimer);
+  state.remoteSaveTimer=setTimeout(async()=>{
+    try{await HPHSupabase.saveAll(state.data);console.log("Supabase sync complete");}
+    catch(error){console.error("Supabase sync failed",error);alert("Online database sync failed: "+(error.message||error));}
+  },700);
+}
+function saveData(){state.data=HPHStorage.save(state.data);scheduleRemoteSave()}
 function saveSession(){
   if(!state.currentUser)return;
   sessionStorage.setItem("hphSession",JSON.stringify({username:state.currentUser.username,role:state.currentUser.role,page:state.activePage||"dashboard"}));
 }
 function clearSession(){sessionStorage.removeItem("hphSession");localStorage.removeItem("hphSession")}
-function restoreSession(){
+async function restoreSession(){
   try{
+    if(window.HPH_USE_SUPABASE&&window.HPHSupabase?.ready){
+      const profile=await HPHSupabase.getCurrentProfile();
+      if(profile){
+        state.onlineMode=true;
+        state.currentUser=profile;
+        state.selectedRole=profile.role;
+        state.data=await HPHSupabase.loadAll();
+        HPHStorage.save(state.data);
+        document.getElementById("loginView").classList.add("hidden");
+        document.getElementById("mainView").classList.remove("hidden");
+        document.getElementById("activeUsername").textContent=profile.username;
+        document.getElementById("activeRole").textContent=profile.role+" · online";
+        document.querySelectorAll('.admin-only').forEach(item=>item.classList.toggle("hidden",profile.role!=="admin"));
+        setRole(profile.role);
+        const savedPage=sessionStorage.getItem("hphActivePage")||"dashboard";
+        goPage(savedPage);
+        return true;
+      }
+    }
     const saved=JSON.parse(sessionStorage.getItem("hphSession")||"null");
     if(!saved)return false;
     const user=state.data.users.find(u=>u.username===saved.username&&u.role===saved.role);
@@ -50,12 +77,52 @@ function restoreSession(){
     setRole(user.role);
     goPage(saved.page||"dashboard");
     return true;
-  }catch(e){clearSession();return false}
+  }catch(e){console.error(e);clearSession();return false}
 }
 function setRole(role){state.selectedRole=role;$("#roleUserBtn").classList.toggle("active",role==="user");$("#roleAdminBtn").classList.toggle("active",role==="admin")}
-function login(){const username=$("#loginUsername").value.trim();const password=$("#loginPassword").value;const user=state.data.users.find(u=>u.username===username&&u.password===password&&u.role===state.selectedRole);if(!user){$("#loginError").classList.remove("hidden");return}$("#loginError").classList.add("hidden");state.currentUser=user;$("#loginView").classList.add("hidden");$("#mainView").classList.remove("hidden");$("#activeUsername").textContent=user.username;$("#activeRole").textContent=user.role;$$('.admin-only').forEach(item=>item.classList.toggle("hidden",user.role!=="admin"));goPage("dashboard");saveSession()}
-function logout(){state.currentUser=null;clearSession();$("#mainView").classList.add("hidden");$("#loginView").classList.remove("hidden");$("#loginPassword").value=""}
-function goPage(page){state.activePage=page;$$('.page').forEach(section=>section.classList.remove("active"));$(`#page-${page}`)?.classList.add("active");$$('.nav-item').forEach(btn=>btn.classList.toggle("active",btn.dataset.page===page));if(page==="dashboard")renderDashboard();if(page==="clients")renderClients();if(page==="plots")renderPlots();if(page==="payments")renderPaymentsPage();if(page==="dues")renderDuesPage();if(page==="documents")renderDocumentsPage();if(page==="reports")renderReports();if(page==="sellers")renderSellers();if(page==="users")renderUsers();if(state.currentUser)saveSession()}
+function loginErrorMessage(error){
+  const message=String(error?.message||error||"");
+  if(/email not confirmed/i.test(message))return "Email is not confirmed. Ask admin to confirm this user in Supabase.";
+  if(/profile/i.test(message)&&/missing|not found|no rows|0 rows/i.test(message))return "Login succeeded, but this user's profile is missing. Contact admin.";
+  if(/failed to fetch|network|load Supabase|CDN|internet/i.test(message))return "Could not connect to the online database. Check internet connection.";
+  return "Incorrect username/email or password.";
+}
+async function login(){
+  const username=$("#loginUsername").value.trim();
+  const password=$("#loginPassword").value;
+  if(window.HPH_USE_SUPABASE&&window.HPHSupabase){
+    try{
+      $("#loginError").classList.add("hidden");
+      await HPHSupabase.ensureReady();
+      const profile=await HPHSupabase.signIn(username,password);
+      state.onlineMode=true;
+      state.currentUser=profile;
+      state.selectedRole=profile.role;
+      state.data=await HPHSupabase.loadAll();
+      HPHStorage.save(state.data);
+      $("#loginView").classList.add("hidden");
+      $("#mainView").classList.remove("hidden");
+      $("#activeUsername").textContent=profile.username || username;
+      $("#activeRole").textContent=profile.role+" · online";
+      $$('.admin-only').forEach(item=>item.classList.toggle("hidden",profile.role!=="admin"));
+      goPage("dashboard");
+      return;
+    }catch(error){
+      console.error("Supabase login error:",error);
+      $("#loginError").textContent=loginErrorMessage(error);
+      $("#loginError").classList.remove("hidden");
+      return;
+    }
+  }
+  const user=state.data.users.find(u=>u.username===username&&u.password===password&&u.role===state.selectedRole);
+  if(!user){$("#loginError").textContent="Incorrect username/email or password.";$("#loginError").classList.remove("hidden");return}
+  $("#loginError").classList.add("hidden");state.onlineMode=false;state.currentUser=user;$("#loginView").classList.add("hidden");$("#mainView").classList.remove("hidden");$("#activeUsername").textContent=user.username;$("#activeRole").textContent=user.role;$$('.admin-only').forEach(item=>item.classList.toggle("hidden",user.role!=="admin"));goPage("dashboard");saveSession()
+}
+async function logout(){
+  if(state.onlineMode&&window.HPHSupabase?.ready){try{await HPHSupabase.signOut()}catch(e){console.warn(e)}}
+  state.currentUser=null;state.onlineMode=false;clearSession();sessionStorage.removeItem("hphActivePage");$("#mainView").classList.add("hidden");$("#loginView").classList.remove("hidden");$("#loginPassword").value=""
+}
+function goPage(page){state.activePage=page;sessionStorage.setItem("hphActivePage",page);$$('.page').forEach(section=>section.classList.remove("active"));$(`#page-${page}`)?.classList.add("active");$$('.nav-item').forEach(btn=>btn.classList.toggle("active",btn.dataset.page===page));if(page==="dashboard")renderDashboard();if(page==="clients")renderClients();if(page==="plots")renderPlots();if(page==="payments")renderPaymentsPage();if(page==="dues")renderDuesPage();if(page==="documents")renderDocumentsPage();if(page==="reports")renderReports();if(page==="sellers")renderSellers();if(page==="users")renderUsers();if(state.currentUser)saveSession()}
 function renderDashboard(){
   if(ensureSecurityDuesForAllSoldPlots()) saveData();
   const clients=state.data.clients;
@@ -295,7 +362,7 @@ function viewClient(id){
 
   const plots = agg.plots.length ? sortPlotsList(agg.plots) : [{
     plotNo:client.plotNo,projectName:client.projectName,intikalNo:client.intikalNo,plotSizeMarla:client.plotSizeMarla,
-    measurements:client.measurements,propertyType:client.propertyType,constructionStatus:client.constructionStatus,
+    khasraNo:client.khasraNo||"",khatauniNo:client.khatauniNo||"",transferredFrom:client.transferredFrom||"",propertyType:client.propertyType,constructionStatus:client.constructionStatus,
     paymentStatus:client.paymentStatus,price:client.totalAmount,amountReceived:displayReceivedAmount(client)
   }];
 
@@ -307,7 +374,9 @@ function viewClient(id){
         ${field("Project",plot.projectName)}
         ${field("Intikal",plot.intikalNo||"-")}
         ${field("Size",`${plot.plotSizeMarla||0} marla`)}
-        ${field("Measurements",plot.measurements||"-")}
+        ${field("Khasra #",plot.khasraNo||"-")}
+        ${field("Khatauni #",plot.khatauniNo||"-")}
+        ${field("Transferred From",plot.transferredFrom||"-")}
         ${field("Type",plot.propertyType||"-")}
         ${field("Construction",constructionStatusLabel(plot.constructionStatus))}
         ${field("Payment",paymentStatusLabel(plot.paymentStatus))}
@@ -364,7 +433,7 @@ function renderClients(){
       <td><span class="badge ${badgeClass(constructionStatuses[0])}">${aggregateConstructionStatusLabel(constructionStatuses)}</span></td>
       <td><div class="row-actions"><button class="btn small-btn" type="button" data-view-client="${client.id}">View</button><button class="btn small-btn" type="button" data-edit-client="${client.id}">Edit</button><button class="btn small-btn" type="button" data-delete-client="${client.id}">Delete</button></div></td>
     </tr>`;
-  }).join(""):`<tr><td colspan="11" class="muted">No clients found.</td></tr>`;
+  }).join(""):`<tr><td colspan="13" class="muted">No clients found.</td></tr>`;
 }
 
 function renderPaymentPlotSelect(){
@@ -579,12 +648,12 @@ async function translateText(sourceId,targetId){
 }
 
 function renderClientDropdown(selectedId=""){const options=state.data.clients.map(client=>`<option value="${client.id}" ${client.id===selectedId?"selected":""}>${escapeHtml(clientOptionLabel(client))}</option>`).join("");$("#plotLinkedClient").innerHTML=`<option value="">No linked client</option>${options}`}
-function openPlotModal(plotId=null){const plot=plotId?state.data.plots.find(p=>p.id===plotId):null;$("#plotModalTitle").textContent=plot?"Edit Plot":"Add Plot";$("#plotForm").reset();$("#plotId").value=plot?.id||"";renderProjectsDropdown(plot?.projectName||state.data.projects[0]?.name||"","#plotProject");renderClientDropdown(plot?.linkedClientId||"");if(plot){$("#plotProject").value=plot.projectName||"";$("#plotNo").value=plot.plotNo||"";$("#plotIntikalNo").value=plot.intikalNo||"";$("#plotSize").value=plot.plotSize||"";$("#plotUnit").value=plot.plotUnit||"Marla";$("#plotShape").value=plot.plotShape||"four-sided";$("#plotMeasurements").value=plot.measurements||"";$("#plotPropertyType").value=plot.propertyType||"Residential";$("#plotConstructionStatus").value=plot.constructionStatus||"plot";$("#plotAvailabilityStatus").value=plot.availabilityStatus||"available";$("#plotLinkedClient").value=plot.linkedClientId||"";$("#plotPrice").value=plot.price?formatMoney(plot.price):"";$("#plotTokenAmount").value=plot.amountReceived?formatMoney(plot.amountReceived):"";$("#plotFullyPaid").checked=normalizePaymentStatus(plot.paymentStatus)==="fully_paid";$("#plotNotes").value=plot.notes||""}updatePlotSoldFields();updatePlotSizePreview();$("#plotModal").classList.remove("hidden")}
+function openPlotModal(plotId=null){const plot=plotId?state.data.plots.find(p=>p.id===plotId):null;$("#plotModalTitle").textContent=plot?"Edit Plot":"Add Plot";$("#plotForm").reset();$("#plotId").value=plot?.id||"";renderProjectsDropdown(plot?.projectName||state.data.projects[0]?.name||"","#plotProject");renderClientDropdown(plot?.linkedClientId||"");if(plot){$("#plotProject").value=plot.projectName||"";$("#plotNo").value=plot.plotNo||"";$("#plotIntikalNo").value=plot.intikalNo||"";$("#plotSize").value=plot.plotSize||"";$("#plotUnit").value=plot.plotUnit||"Marla";$("#plotKhasraNo").value=plot.khasraNo||"";$("#plotKhatauniNo").value=plot.khatauniNo||"";$("#plotTransferredFrom").value=plot.transferredFrom||"";$("#plotPropertyType").value=plot.propertyType||"Residential";$("#plotConstructionStatus").value=plot.constructionStatus||"plot";$("#plotAvailabilityStatus").value=plot.availabilityStatus||"available";$("#plotLinkedClient").value=plot.linkedClientId||"";$("#plotPrice").value=plot.price?formatMoney(plot.price):"";$("#plotTokenAmount").value=plot.amountReceived?formatMoney(plot.amountReceived):"";$("#plotFullyPaid").checked=normalizePaymentStatus(plot.paymentStatus)==="fully_paid";$("#plotNotes").value=plot.notes||""}updatePlotSoldFields();updatePlotSizePreview();$("#plotModal").classList.remove("hidden")}
 function closePlotModal(){$("#plotModal").classList.add("hidden")}
 function updatePlotSoldFields(){const sold=$("#plotAvailabilityStatus").value==="sold";$("#soldPlotFields").classList.toggle("hidden",!sold)}
 function updatePlotSizePreview(){const size=$("#plotSize").value;const unit=$("#plotUnit").value;if(!size){$("#plotSizePreview").textContent="";return}$("#plotSizePreview").textContent=`Converted size: ${toMarla(size,unit).toFixed(2)} marla`}
 function savePlot(event){event.preventDefault();const id=$("#plotId").value||uid("plot");const now=new Date().toISOString();const existing=state.data.plots.find(p=>p.id===id);const availability=$("#plotAvailabilityStatus").value;const price=parseMoney($("#plotPrice").value);let amountReceived=parseMoney($("#plotTokenAmount").value);let paymentStatus="to_be_paid";if(availability==="sold"){paymentStatus=calculateClientPaymentStatus(price,amountReceived,$("#plotFullyPaid").checked);if(paymentStatus==="fully_paid"&&price>0)amountReceived=price}else{amountReceived=0;paymentStatus=""}
-const plot={id,sourceClientId:existing?.sourceClientId||null,projectName:$("#plotProject").value,plotNo:formatPlotNo($("#plotNo").value),intikalNo:$("#plotIntikalNo").value.trim(),plotSize:$("#plotSize").value,plotUnit:$("#plotUnit").value,plotSizeMarla:Number(toMarla($("#plotSize").value,$("#plotUnit").value).toFixed(2)),plotShape:$("#plotShape").value,measurements:$("#plotMeasurements").value.trim(),propertyType:$("#plotPropertyType").value,constructionStatus:$("#plotConstructionStatus").value,availabilityStatus:availability,linkedClientId:availability==="sold"?$("#plotLinkedClient").value:"",price:availability==="sold"?price:0,amountReceived,paymentStatus,notes:$("#plotNotes").value.trim(),createdAt:existing?.createdAt||now,updatedAt:now};
+const plot={id,sourceClientId:existing?.sourceClientId||null,projectName:$("#plotProject").value,plotNo:formatPlotNo($("#plotNo").value),intikalNo:$("#plotIntikalNo").value.trim(),plotSize:$("#plotSize").value,plotUnit:$("#plotUnit").value,plotSizeMarla:Number(toMarla($("#plotSize").value,$("#plotUnit").value).toFixed(2)),khasraNo:$("#plotKhasraNo").value.trim(),khatauniNo:$("#plotKhatauniNo").value.trim(),transferredFrom:$("#plotTransferredFrom").value.trim(),propertyType:$("#plotPropertyType").value,constructionStatus:$("#plotConstructionStatus").value,availabilityStatus:availability,linkedClientId:availability==="sold"?$("#plotLinkedClient").value:"",price:availability==="sold"?price:0,amountReceived,paymentStatus,notes:$("#plotNotes").value.trim(),createdAt:existing?.createdAt||now,updatedAt:now};
 if(!plot.plotNo){alert("Plot number is required.");return}
 if(availability==="sold"&&!plot.linkedClientId){if(!confirm("This plot is marked Sold but no client is linked. Save anyway?"))return}
 if(existing && existing.availabilityStatus==="sold"){
@@ -629,9 +698,9 @@ function deletePlot(id){
   state.data.plots=state.data.plots.filter(p=>p.id!==id);
   saveData();renderPlots();renderClients();renderDashboard();renderPaymentsPage();renderDuesPage();
 }
-function viewPlot(id){const plot=state.data.plots.find(p=>p.id===id);if(!plot)return;$("#viewPlotTitle").textContent=`Plot ${plot.plotNo}`;const fields=[["Project",plot.projectName],["Plot Number",plot.plotNo],["Intikal Number",plot.intikalNo||"-"],["Size",`${plot.plotSize||"-"} ${plot.plotUnit||""} (${plot.plotSizeMarla||0} marla)`],["Shape",plot.plotShape==="three-sided"?"Three-sided plot":"Four-sided plot"],["Measurements",plot.measurements||"-"],["Type",plot.propertyType],["Construction",constructionStatusLabel(plot.constructionStatus)],["Availability",availabilityStatusLabel(plot.availabilityStatus)],["Linked Client",getClientName(plot.linkedClientId)],["Payment",plot.availabilityStatus==="sold"?paymentStatusLabel(plot.paymentStatus):"-"],["Price",plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.price)}`:"-"],["Received",plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.amountReceived)}`:"-"],["Notes",plot.notes||"-","full"]];$("#viewPlotBody").innerHTML=fields.map(([label,value,full])=>`<div class="detail-item ${full==="full"?"full":""}"><div class="detail-label">${escapeHtml(label)}</div><div class="detail-value">${escapeHtml(value||"-")}</div></div>`).join("");$("#viewPlotModal").classList.remove("hidden")}
+function viewPlot(id){const plot=state.data.plots.find(p=>p.id===id);if(!plot)return;$("#viewPlotTitle").textContent=`Plot ${plot.plotNo}`;const fields=[["Project",plot.projectName],["Plot Number",plot.plotNo],["Intikal Number",plot.intikalNo||"-"],["Size",`${plot.plotSize||"-"} ${plot.plotUnit||""} (${plot.plotSizeMarla||0} marla)`],["Khasra Number",plot.khasraNo||"-"],["Khatauni Number",plot.khatauniNo||"-"],["Transferred From",plot.transferredFrom||"-"],["Type",plot.propertyType],["Construction",constructionStatusLabel(plot.constructionStatus)],["Availability",availabilityStatusLabel(plot.availabilityStatus)],["Linked Client",getClientName(plot.linkedClientId)],["Payment",plot.availabilityStatus==="sold"?paymentStatusLabel(plot.paymentStatus):"-"],["Price",plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.price)}`:"-"],["Received",plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.amountReceived)}`:"-"],["Notes",plot.notes||"-","full"]];$("#viewPlotBody").innerHTML=fields.map(([label,value,full])=>`<div class="detail-item ${full==="full"?"full":""}"><div class="detail-label">${escapeHtml(label)}</div><div class="detail-value">${escapeHtml(value||"-")}</div></div>`).join("");$("#viewPlotModal").classList.remove("hidden")}
 function closeViewPlotModal(){$("#viewPlotModal").classList.add("hidden")}
-function renderPlots(){const query=($("#plotSearchInput")?.value||"").toLowerCase().trim();const sizeQuery=($("#plotSizeSearchInput")?.value||"").trim();const availability=$("#plotAvailabilityFilter")?.value||"all";let plots=sortPlotsList(state.data.plots);if(query){plots=plots.filter(plot=>[plot.plotNo,plot.intikalNo,plot.projectName,plot.measurements,getClientName(plot.linkedClientId)].join(" ").toLowerCase().includes(query))}if(sizeQuery){const wanted=Number(sizeQuery.replace(/[^\d.]/g,""));if(!Number.isNaN(wanted)&&wanted>0){plots=plots.filter(plot=>Number(plot.plotSizeMarla||0)===wanted)}}if(availability!=="all")plots=plots.filter(plot=>plot.availabilityStatus===availability);$("#plotsTableBody").innerHTML=plots.length?plots.map(plot=>`<tr><td><strong>${escapeHtml(plot.plotNo)}</strong></td><td>${escapeHtml(plot.projectName||"-")}</td><td>${escapeHtml(plot.intikalNo||"-")}</td><td>${escapeHtml(plot.plotSizeMarla||0)} marla</td><td>${escapeHtml(plot.measurements||"-")}</td><td>${escapeHtml(plot.propertyType||"-")}</td><td><span class="badge ${badgeClass(plot.availabilityStatus)}">${availabilityStatusLabel(plot.availabilityStatus)}</span></td><td>${plot.availabilityStatus==="sold"?`<span class="badge ${badgeClass(plot.paymentStatus)}">${paymentStatusLabel(plot.paymentStatus)}</span>`:"-"}</td><td>${escapeHtml(getClientName(plot.linkedClientId))}</td><td>${plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.price)}`:"-"}</td><td><div class="row-actions"><button class="btn small-btn" type="button" data-view-plot="${plot.id}">View</button><button class="btn small-btn" type="button" data-edit-plot="${plot.id}">Edit</button><button class="btn small-btn" type="button" data-delete-plot="${plot.id}">Delete</button></div></td></tr>`).join(""):`<tr><td colspan="11" class="muted">No plots found.</td></tr>`}
+function renderPlots(){const query=($("#plotSearchInput")?.value||"").toLowerCase().trim();const sizeQuery=($("#plotSizeSearchInput")?.value||"").trim();const availability=$("#plotAvailabilityFilter")?.value||"all";let plots=sortPlotsList(state.data.plots);if(query){plots=plots.filter(plot=>[plot.plotNo,plot.intikalNo,plot.projectName,plot.khasraNo,plot.khatauniNo,plot.transferredFrom,getClientName(plot.linkedClientId)].join(" ").toLowerCase().includes(query))}if(sizeQuery){const wanted=Number(sizeQuery.replace(/[^\d.]/g,""));if(!Number.isNaN(wanted)&&wanted>0){plots=plots.filter(plot=>Number(plot.plotSizeMarla||0)===wanted)}}if(availability!=="all")plots=plots.filter(plot=>plot.availabilityStatus===availability);$("#plotsTableBody").innerHTML=plots.length?plots.map(plot=>`<tr><td><strong>${escapeHtml(plot.plotNo)}</strong></td><td>${escapeHtml(plot.projectName||"-")}</td><td>${escapeHtml(plot.intikalNo||"-")}</td><td>${escapeHtml(plot.plotSizeMarla||0)} marla</td><td>${escapeHtml(plot.khasraNo||"-")}</td><td>${escapeHtml(plot.khatauniNo||"-")}</td><td>${escapeHtml(plot.transferredFrom||"-")}</td><td>${escapeHtml(plot.propertyType||"-")}</td><td><span class="badge ${badgeClass(plot.availabilityStatus)}">${availabilityStatusLabel(plot.availabilityStatus)}</span></td><td>${plot.availabilityStatus==="sold"?`<span class="badge ${badgeClass(plot.paymentStatus)}">${paymentStatusLabel(plot.paymentStatus)}</span>`:"-"}</td><td>${escapeHtml(getClientName(plot.linkedClientId))}</td><td>${plot.availabilityStatus==="sold"?`Rs ${formatMoney(plot.price)}`:"-"}</td><td><div class="row-actions"><button class="btn small-btn" type="button" data-view-plot="${plot.id}">View</button><button class="btn small-btn" type="button" data-edit-plot="${plot.id}">Edit</button><button class="btn small-btn" type="button" data-delete-plot="${plot.id}">Delete</button></div></td></tr>`).join(""):`<tr><td colspan="13" class="muted">No plots found.</td></tr>`}
 
 
 function renderDuesPage(){
@@ -817,6 +886,7 @@ function renderUsers(){
   </tr>`).join(""):`<tr><td colspan="4" class="muted">No users found.</td></tr>`;
 }
 function openUserModal(userId=null){
+  if(state.onlineMode){alert("Online users must be created in Supabase Authentication for now. This app will read them from the profiles table.");return}
   if(!state.currentUser||state.currentUser.role!=="admin"){alert("Only admin can manage users.");return}
   const user=userId?state.data.users.find(u=>u.id===userId):null;
   document.getElementById("userModalTitle").textContent=user?"Edit User":"Add User";
@@ -831,6 +901,7 @@ function openUserModal(userId=null){
 function closeUserModal(){document.getElementById("userModal").classList.add("hidden")}
 function saveUser(event){
   event.preventDefault();
+  if(state.onlineMode){alert("Online users must be managed in Supabase Authentication for now.");return}
   if(!state.currentUser||state.currentUser.role!=="admin"){alert("Only admin can manage users.");return}
   const id=document.getElementById("userId").value||uid("user");
   const username=document.getElementById("userUsername").value.trim();
@@ -854,6 +925,7 @@ function saveUser(event){
   saveData();closeUserModal();renderUsers();
 }
 function deleteUser(userId){
+  if(state.onlineMode){alert("Online users must be deleted/disabled in Supabase Authentication for now.");return}
   if(!state.currentUser||state.currentUser.role!=="admin"){alert("Only admin can delete users.");return}
   const user=state.data.users.find(u=>u.id===userId);if(!user)return;
   if(user.id===state.currentUser.id){alert("You cannot delete the account you are currently logged into.");return}
@@ -976,7 +1048,7 @@ function generateSaleAgreementHtml(client,plot,seller){
         </tr>
       </table>
       <div class="agreement-body">
-        <p>جو کہ فریق اول نے اپنا پلاٹ نمبر <strong class="doc-ltr">${safeDocText(plot.plotNo)}</strong> | تعدادی <strong>${safeDocText(plot.plotSizeMarla)} مرلہ</strong> پلاٹ سائز <span class="doc-ltr">${safeDocText(plot.measurements,"__")}</span> بمطابق <span class="doc-ltr">${formatMoney(plotSizeYards(plot))}</span> مربع گز واقع موضع اٹھال تحصیل وضلع اسلام آباد کا مالک و قابض ہے اور فریق اول نے پلاٹ ذہا کا معاہدہ بیع ہمراہ فریق دوئم بالعوض مبلغ <strong>Rs ${formatMoney(price)}</strong> میں طے کر کے فریق اول نے فریق دوئم سے بطور بیانہ مبلغ <strong>Rs ${formatMoney(received)}</strong> روپے نقد آج مورخہ <span class="doc-ltr">${safeDocText(today)}</span> کو وصول پا لیا ہے جبکہ بقایا رقم مبلغ <strong>Rs ${formatMoney(remaining)}</strong> روپے فریق دوئم فریق اول کو مورخہ <span class="doc-ltr">${safeDocText(dueDate)}</span> تک ادا کرنے کے پابند وذمہ دار ہے۔</p>
+        <p>جو کہ فریق اول نے اپنا پلاٹ نمبر <strong class="doc-ltr">${safeDocText(plot.plotNo)}</strong> | تعدادی <strong>${safeDocText(plot.plotSizeMarla)} مرلہ</strong> خسرہ نمبر <span class="doc-ltr">${safeDocText(plot.khasraNo,"__")}</span>، کھتونی نمبر <span class="doc-ltr">${safeDocText(plot.khatauniNo,"__")}</span>، منتقل از <strong>${safeDocText(plot.transferredFrom,"__")}</strong>، بمطابق <span class="doc-ltr">${formatMoney(plotSizeYards(plot))}</span> مربع گز واقع موضع اٹھال تحصیل وضلع اسلام آباد کا مالک و قابض ہے اور فریق اول نے پلاٹ ذہا کا معاہدہ بیع ہمراہ فریق دوئم بالعوض مبلغ <strong>Rs ${formatMoney(price)}</strong> میں طے کر کے فریق اول نے فریق دوئم سے بطور بیانہ مبلغ <strong>Rs ${formatMoney(received)}</strong> روپے نقد آج مورخہ <span class="doc-ltr">${safeDocText(today)}</span> کو وصول پا لیا ہے جبکہ بقایا رقم مبلغ <strong>Rs ${formatMoney(remaining)}</strong> روپے فریق دوئم فریق اول کو مورخہ <span class="doc-ltr">${safeDocText(dueDate)}</span> تک ادا کرنے کے پابند وذمہ دار ہے۔</p>
         <p>یہ کہ اگر کوئی تھوڑی بہت رقم رہ بھی گئی تو اُس کے لئے مزید کچھ وقت دے دیا جائے گا جبکہ پلاٹ مذکورہ بالا کی رجسٹری / انتقال حق فریق دوئم یا اُس کے نامزد کردہ فرد افراد کے نام منتقل کروا دے جس کی ٹرانسفر کا خرچ بذمہ مشتری خریدار ہو گا۔ رقم مکمل ہونے پر پلاٹ مذکورہ بالا کا قبضہ حوالہ مشتری فریق دوئم کر دیا جائے گا۔</p>
         <p>یہ کہ پلاٹ ذہا کی محکمہ مال میں فی مرلہ قیمت 275,000 روپے ہے اور اس پر فائلر کا گین ٹیکس 4.5 فیصد اور E7 ٹیکس 1 فیصد ہے اور فریق اول وقت مقررہ تک موجودہ شرح کے مطابق پلاٹ ذہا پر اپنے ذمہ واجب الادا ٹیکس ادا کرنے کا پابند و ذمہ دار ہے اور اگر فریق دوئم نے دیر سے رجسٹری / انتقال کروانے پر اگر فی مرلہ قیمت یا کوئی ٹیکس بڑھا تو ایسی صورت میں موجودہ شرح سے زائد جو بھی ٹیکس ہوگا وہ فریق دوئم ادا کرے گا۔</p>
         <p>نیز یہ کہ فریق دوئم پلاٹ ذہا کا تجارتی استعمال کرنے کا مجاز نہیں ہوگا اور نہ ہی اپنے پلاٹ مکان کے ارد گرد کوئی ریڑھی، کھوکھا لگائے گا۔ ایسا کرنے کی صورت میں فریق اول فریق دوئم کے ریڑھی کھوکھا کو توڑنے گرانے موقع سے ہٹانے کا حق محفوظ رکھتا ہے۔ اس صورت میں فریق دوئم مذکورہ اور وارثان / خریداران بازگشت کو کوئی عذر اعتراض نہ ہوگا۔</p>
@@ -1107,33 +1179,37 @@ function resetReportColumns(){
 }
 
 function loadDummyRecords(){
-  if(!confirm("Load dummy clients and plots for testing? This will replace the current local test data in this browser."))return;
+  if(state.onlineMode&&!confirm("Load dummy records into the online Supabase database? This will replace current online test business data."))return;
+  if(!state.onlineMode&&!confirm("Load dummy clients and plots for testing? This will replace the current local test data in this browser."))return;
+  const c1=uid("client"),c2=uid("client"),c3=uid("client");
+  const p1=uid("plot"),p2=uid("plot"),p3=uid("plot"),p4=uid("plot"),p5=uid("plot");
+  const now=new Date().toISOString();
   state.data.clients=[
-    {id:"demo_client_1",nameEn:"Ali Khan",nameUr:"علی خان",fatherEn:"Omer Khan",fatherUr:"عمر خان",cnic:"61101-1111111-1",phone:"0300-1111111",addressEn:"House 4, Street 2, Islamabad",addressUr:"مکان 4، اسٹریٹ 2، اسلام آباد",notes:"Demo client",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_client_2",nameEn:"Noor Adnan",nameUr:"نور عدنان",fatherEn:"Adnan Khan",fatherUr:"عدنان خان",cnic:"61101-2222222-2",phone:"0300-2222222",addressEn:"House 13, Street 3, Islamabad",addressUr:"مکان 13، اسٹریٹ 3، اسلام آباد",notes:"Demo client",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_client_3",nameEn:"Danial Chheenah",nameUr:"دانیال چینہ",fatherEn:"Majeed Chheenah",fatherUr:"ماجد چینہ",cnic:"61101-3333333-3",phone:"0300-3333333",addressEn:"Alwadi Colony, Islamabad",addressUr:"الوادی کالونی، اسلام آباد",notes:"Demo client",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}
+    {id:c1,nameEn:"Ali Khan",nameUr:"علی خان",fatherEn:"Omer Khan",fatherUr:"عمر خان",cnic:"61101-1111111-1",phone:"0300-1111111",addressEn:"House 4, Street 2, Islamabad",addressUr:"مکان 4، اسٹریٹ 2، اسلام آباد",notes:"Demo client",createdAt:now,updatedAt:now},
+    {id:c2,nameEn:"Noor Adnan",nameUr:"نور عدنان",fatherEn:"Adnan Khan",fatherUr:"عدنان خان",cnic:"61101-2222222-2",phone:"0300-2222222",addressEn:"House 13, Street 3, Islamabad",addressUr:"مکان 13، اسٹریٹ 3، اسلام آباد",notes:"Demo client",createdAt:now,updatedAt:now},
+    {id:c3,nameEn:"Danial Chheenah",nameUr:"دانیال چینہ",fatherEn:"Majeed Chheenah",fatherUr:"ماجد چینہ",cnic:"61101-3333333-3",phone:"0300-3333333",addressEn:"Alwadi Colony, Islamabad",addressUr:"الوادی کالونی، اسلام آباد",notes:"Demo client",createdAt:now,updatedAt:now}
   ];
   state.data.plots=[
-    {id:"demo_plot_1",sourceClientId:null,projectName:"IGTV (Islamabad Green Traders Valley)",plotNo:"A-1",intikalNo:"",plotSize:"5",plotUnit:"Marla",plotSizeMarla:5,plotShape:"four-sided",measurements:"35*25",propertyType:"Residential",constructionStatus:"plot",availabilityStatus:"available",linkedClientId:"",price:0,amountReceived:0,paymentStatus:"",notes:"Demo available plot",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_plot_2",sourceClientId:null,projectName:"IGTV (Islamabad Green Traders Valley)",plotNo:"A-2",intikalNo:"321",plotSize:"5",plotUnit:"Marla",plotSizeMarla:5,plotShape:"four-sided",measurements:"35*25",propertyType:"Residential",constructionStatus:"plot",availabilityStatus:"sold",linkedClientId:"demo_client_1",price:2500000,amountReceived:500000,paymentStatus:"partially_paid",notes:"Demo sold plot",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_plot_3",sourceClientId:null,projectName:"Badar Farms",plotNo:"B-10",intikalNo:"775",plotSize:"1",plotUnit:"Kanal",plotSizeMarla:20,plotShape:"four-sided",measurements:"70*70",propertyType:"Residential",constructionStatus:"constructed",availabilityStatus:"sold",linkedClientId:"demo_client_2",price:6000000,amountReceived:6000000,paymentStatus:"fully_paid",notes:"Demo fully paid plot",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_plot_4",sourceClientId:null,projectName:"Sanam Gardens",plotNo:"C-5",intikalNo:"",plotSize:"200",plotUnit:"Yards",plotSizeMarla:8,plotShape:"three-sided",measurements:"45*35*50",propertyType:"Commercial",constructionStatus:"plot",availabilityStatus:"available",linkedClientId:"",price:0,amountReceived:0,paymentStatus:"",notes:"Demo triangle/three-sided plot",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_plot_5",sourceClientId:null,projectName:"Baba Chitu",plotNo:"D-4",intikalNo:"901",plotSize:"10",plotUnit:"Marla",plotSizeMarla:10,plotShape:"four-sided",measurements:"50*45",propertyType:"Commercial",constructionStatus:"plot",availabilityStatus:"sold",linkedClientId:"demo_client_3",price:4000000,amountReceived:0,paymentStatus:"to_be_paid",notes:"Demo to-be-paid plot",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}
+    {id:p1,sourceClientId:null,projectName:"IGTV (Islamabad Green Traders Valley)",plotNo:"A-1",intikalNo:"",plotSize:"5",plotUnit:"Marla",plotSizeMarla:5,khasraNo:"125/7",khatauniNo:"48",transferredFrom:"Original Project File",propertyType:"Residential",constructionStatus:"plot",availabilityStatus:"available",linkedClientId:"",price:0,amountReceived:0,paymentStatus:"",notes:"Demo available plot",createdAt:now,updatedAt:now},
+    {id:p2,sourceClientId:null,projectName:"IGTV (Islamabad Green Traders Valley)",plotNo:"A-2",intikalNo:"321",plotSize:"5",plotUnit:"Marla",plotSizeMarla:5,khasraNo:"125/7",khatauniNo:"48",transferredFrom:"Original Project File",propertyType:"Residential",constructionStatus:"plot",availabilityStatus:"sold",linkedClientId:c1,price:2500000,amountReceived:500000,paymentStatus:"partially_paid",notes:"Demo sold plot",createdAt:now,updatedAt:now},
+    {id:p3,sourceClientId:null,projectName:"Badar Farms",plotNo:"B-10",intikalNo:"775",plotSize:"1",plotUnit:"Kanal",plotSizeMarla:20,khasraNo:"441/2",khatauniNo:"93",transferredFrom:"Malik Ahmed",propertyType:"Residential",constructionStatus:"constructed",availabilityStatus:"sold",linkedClientId:c2,price:6000000,amountReceived:6000000,paymentStatus:"fully_paid",notes:"Demo fully paid plot",createdAt:now,updatedAt:now},
+    {id:p4,sourceClientId:null,projectName:"Sanam Gardens",plotNo:"C-5",intikalNo:"",plotSize:"200",plotUnit:"Yards",plotSizeMarla:8,khasraNo:"208/1",khatauniNo:"12",transferredFrom:"Farm Transfer",propertyType:"Commercial",constructionStatus:"plot",availabilityStatus:"available",linkedClientId:"",price:0,amountReceived:0,paymentStatus:"",notes:"Demo plot",createdAt:now,updatedAt:now},
+    {id:p5,sourceClientId:null,projectName:"Baba Chitu",plotNo:"D-4",intikalNo:"901",plotSize:"10",plotUnit:"Marla",plotSizeMarla:10,khasraNo:"77/9",khatauniNo:"31",transferredFrom:"Baba Chitu File",propertyType:"Commercial",constructionStatus:"plot",availabilityStatus:"sold",linkedClientId:c3,price:4000000,amountReceived:0,paymentStatus:"to_be_paid",notes:"Demo to-be-paid plot",createdAt:now,updatedAt:now}
   ];
   state.data.payments=[
-    {id:"demo_payment_1",clientId:"demo_client_1",plotId:"demo_plot_2",type:"cash",amount:300000,date:new Date().toISOString().slice(0,10),note:"Demo cash instalment",exchangeItem:"",createdAt:new Date().toISOString()},
-    {id:"demo_payment_2",clientId:"demo_client_1",plotId:"demo_plot_2",type:"exchange",amount:200000,date:new Date().toISOString().slice(0,10),note:"Demo exchange value",exchangeItem:"Motorcycle",createdAt:new Date().toISOString()}
+    {id:uid("payment"),clientId:c1,plotId:p2,type:"cash",amount:300000,date:new Date().toISOString().slice(0,10),note:"Demo cash instalment",exchangeItem:"",createdAt:now},
+    {id:uid("payment"),clientId:c1,plotId:p2,type:"exchange",amount:200000,date:new Date().toISOString().slice(0,10),note:"Demo exchange value",exchangeItem:"Motorcycle",createdAt:now}
   ];
   state.data.dues=[
-    {id:"demo_due_1",clientId:"demo_client_1",plotId:"demo_plot_2",type:"Security Fee",amount:500,discountAmount:0,date:new Date().toISOString().slice(0,7),paid:false,paidDate:"",status:"unpaid",note:"Demo monthly security fee",createdAt:new Date().toISOString()},
-    {id:"demo_due_2",clientId:"demo_client_1",plotId:"demo_plot_2",type:"Boundary Wall",amount:25000,discountAmount:5000,date:new Date().toISOString().slice(0,7),paid:false,paidDate:"",status:"unpaid",note:"Demo discounted due",createdAt:new Date().toISOString()},
-    {id:"demo_due_3",clientId:"demo_client_2",plotId:"demo_plot_3",type:"Security Fee",amount:500,discountAmount:0,date:new Date().toISOString().slice(0,7),paid:true,paidDate:new Date().toISOString().slice(0,10),status:"paid",note:"Demo paid security fee",createdAt:new Date().toISOString()}
+    {id:uid("due"),clientId:c1,plotId:p2,type:"Security Fee",amount:500,discountAmount:0,date:new Date().toISOString().slice(0,7),paid:false,paidDate:"",status:"unpaid",note:"Demo monthly security fee",createdAt:now},
+    {id:uid("due"),clientId:c1,plotId:p2,type:"Boundary Wall",amount:25000,discountAmount:5000,date:new Date().toISOString().slice(0,7),paid:false,paidDate:"",status:"unpaid",note:"Demo discounted due",createdAt:now},
+    {id:uid("due"),clientId:c2,plotId:p3,type:"Security Fee",amount:500,discountAmount:0,date:new Date().toISOString().slice(0,7),paid:true,paidDate:new Date().toISOString().slice(0,10),status:"paid",note:"Demo paid security fee",createdAt:now}
   ];
   state.data.sellers=[
-    {id:"demo_seller_1",nameEn:"Hassan Property House",nameUr:"حسن پراپرٹی ہاؤس",fatherEn:"",fatherUr:"",cnic:"",phone:"0300-0000000",addressEn:"Main Murree Road, Bara Kahu, Islamabad",addressUr:"مین مری روڈ، بارہ کہو، اسلام آباد",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:"demo_seller_2",nameEn:"Malik Ahmed",nameUr:"ملک احمد",fatherEn:"Malik Kareem",fatherUr:"ملک کریم",cnic:"61101-4444444-4",phone:"0300-4444444",addressEn:"Islamabad",addressUr:"اسلام آباد",createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}
+    {id:uid("seller"),nameEn:"Hassan Property House",nameUr:"حسن پراپرٹی ہاؤس",fatherEn:"",fatherUr:"",cnic:"",phone:"0300-0000000",addressEn:"Main Murree Road, Bara Kahu, Islamabad",addressUr:"مین مری روڈ، بارہ کہو، اسلام آباد",createdAt:now,updatedAt:now},
+    {id:uid("seller"),nameEn:"Malik Ahmed",nameUr:"ملک احمد",fatherEn:"Malik Kareem",fatherUr:"ملک کریم",cnic:"61101-4444444-4",phone:"0300-4444444",addressEn:"Islamabad",addressUr:"اسلام آباد",createdAt:now,updatedAt:now}
   ];
-  saveData();renderClients();renderPlots();renderSellers();renderDashboard();alert("Dummy records loaded.");
+  saveData();renderClients();renderPlots();renderSellers();renderDashboard();alert("Dummy records loaded."+(state.onlineMode?" Syncing to Supabase...":""));
 }
 
 
@@ -1181,7 +1257,9 @@ function getMasterReportConfig(){
     {key:"plotNo",label:"Plot #",get:r=>r.plot?.plotNo||""},
     {key:"intikal",label:"Intikal",get:r=>r.plot?.intikalNo||""},
     {key:"size",label:"Size (Marla)",get:r=>r.plot?Number(r.plot.plotSizeMarla||0):""},
-    {key:"measurements",label:"Measurements",get:r=>r.plot?.measurements||""},
+    {key:"khasraNo",label:"Khasra Number",get:r=>r.plot?.khasraNo||""},
+    {key:"khatauniNo",label:"Khatauni Number",get:r=>r.plot?.khatauniNo||""},
+    {key:"transferredFrom",label:"Transferred From",get:r=>r.plot?.transferredFrom||""},
     {key:"type",label:"Type",get:r=>r.plot?.propertyType||""},
     {key:"construction",label:"Construction",get:r=>r.plot?constructionStatusLabel(r.plot.constructionStatus):""},
     {key:"paymentStatus",label:"Payment Status",get:r=>r.plot?paymentStatusLabel(r.plot.paymentStatus):""},
@@ -1244,7 +1322,9 @@ function getPlotsReportConfig(){
     {key:"intikal",label:"Intikal",get:r=>r.plot.intikalNo||""},
     {key:"size",label:"Size (Marla)",get:r=>Number(r.plot.plotSizeMarla||0)},
     {key:"originalSize",label:"Original Size",get:r=>`${r.plot.plotSize||""} ${r.plot.plotUnit||""}`.trim()},
-    {key:"measurements",label:"Measurements",get:r=>r.plot.measurements||""},
+    {key:"khasraNo",label:"Khasra Number",get:r=>r.plot.khasraNo||""},
+    {key:"khatauniNo",label:"Khatauni Number",get:r=>r.plot.khatauniNo||""},
+    {key:"transferredFrom",label:"Transferred From",get:r=>r.plot.transferredFrom||""},
     {key:"type",label:"Type",get:r=>r.plot.propertyType||""},
     {key:"construction",label:"Construction",get:r=>constructionStatusLabel(r.plot.constructionStatus)},
     {key:"availability",label:"Availability",get:r=>availabilityStatusLabel(r.plot.availabilityStatus)},
@@ -1375,20 +1455,22 @@ function restoreBackupFromFile(file){
   };
   reader.readAsText(file);
 }
-function clearTestData(){
+async function clearTestData(){
   const phrase="CLEAR TEST DATA";
   const typed=prompt(`This will remove all test clients, plots, sellers, payments, dues, added users, and added projects. It keeps only default users and default projects. Type ${phrase} to continue.`);
   if(typed!==phrase)return;
+  if(state.onlineMode&&window.HPHSupabase?.ready){try{await HPHSupabase.clearBusinessData();state.data=await HPHSupabase.loadAll();HPHStorage.save(state.data);renderDashboard();renderClients();renderPlots();renderSellers();alert("Online test business data cleared. Users and projects remain.");return;}catch(error){alert("Could not clear online data: "+(error.message||error));return;}}
   state.data=HPHStorage.save(HPHStorage.defaultData());
   clearSession();
   alert("Test data cleared. Please log in again.");
   location.reload();
 }
-function clearAllData(){
+async function clearAllData(){
   if(!state.currentUser || state.currentUser.role!=="admin"){alert("Only admins can clear all data.");return;}
   const phrase="DELETE";
   const typed=prompt(`DANGER: This will reset all local app data in this browser. Download a backup first. Type ${phrase} to continue.`);
   if(typed!==phrase)return;
+  if(state.onlineMode&&window.HPHSupabase?.ready){try{await HPHSupabase.clearBusinessData();state.data=await HPHSupabase.loadAll();HPHStorage.save(state.data);renderDashboard();renderClients();renderPlots();renderSellers();alert("Online business data cleared. Auth users and projects remain.");return;}catch(error){alert("Could not clear online data: "+(error.message||error));return;}}
   state.data=HPHStorage.save(HPHStorage.defaultData());
   clearSession();
   alert("All local data reset. Please log in again.");
@@ -1399,9 +1481,9 @@ function setupEvents(){
   const on=(selector,event,handler)=>{const el=$(selector);if(el)el.addEventListener(event,handler)};
   on("#roleUserBtn","click",()=>setRole("user"));
   on("#roleAdminBtn","click",()=>setRole("admin"));
-  on("#loginBtn","click",login);
+  on("#loginBtn","click",()=>login());
   on("#loginPassword","keydown",event=>{if(event.key==="Enter")login()});
-  on("#logoutBtn","click",logout);
+  on("#logoutBtn","click",()=>logout());
   $$('.nav-item').forEach(btn=>btn.addEventListener("click",()=>goPage(btn.dataset.page)));
   $$('[data-go-page]').forEach(btn=>btn.addEventListener("click",()=>goPage(btn.dataset.goPage)));
   on("#downloadBackupBtn","click",()=>HPHExports.downloadBackup(state.data));
@@ -1546,5 +1628,5 @@ function setupEvents(){
   on("#clientModal","click",event=>{if(event.target.id==="clientModal")closeClientModal()});
   on("#viewClientModal","click",event=>{if(event.target.id==="viewClientModal")closeViewClientModal()});
 }
-function init(){if(ensureSecurityDuesForAllSoldPlots()) saveData();else saveData();setupEvents();setRole("user");renderProjectsDropdown();renderProjectsDropdown(state.data.projects[0]?.name||"","#plotProject");renderAvailablePlotSelect();if(!restoreSession()){document.getElementById("loginView").classList.remove("hidden");document.getElementById("mainView").classList.add("hidden");renderDashboard()}}
+async function init(){if(ensureSecurityDuesForAllSoldPlots()) saveData();else saveData();setupEvents();setRole("user");renderProjectsDropdown();renderProjectsDropdown(state.data.projects[0]?.name||"","#plotProject");renderAvailablePlotSelect();if(!(await restoreSession())){document.getElementById("loginView").classList.remove("hidden");document.getElementById("mainView").classList.add("hidden");renderDashboard()}}
 document.addEventListener("DOMContentLoaded",init);
