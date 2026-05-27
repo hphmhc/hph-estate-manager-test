@@ -436,3 +436,71 @@ td{color:#263341;}
 .brand-mark.logo-mark{background:#fff;color:transparent;border:1px solid var(--line);box-shadow:0 10px 24px rgba(17,24,39,.08);overflow:hidden;padding:0}
 .brand-mark.logo-mark img{width:100%;height:100%;display:block;object-fit:contain;border-radius:inherit}
 .brand-mark.small.logo-mark{box-shadow:none}
+
+
+/* Stage 15.2 logo scaling and watermark cleanup */
+img{max-width:100%;height:auto;}
+.logo-mark{position:relative;flex:0 0 auto;overflow:hidden;}
+.brand-mark.logo-mark{
+  width:58px;
+  height:58px;
+  border-radius:16px;
+  background:#fff;
+  color:transparent;
+  border:1px solid var(--line);
+  box-shadow:0 10px 24px rgba(17,24,39,.08);
+  overflow:hidden;
+  padding:0;
+}
+.brand-mark.logo-mark img{
+  width:100%;
+  height:100%;
+  display:block;
+  object-fit:contain;
+  object-position:center;
+  border-radius:inherit;
+}
+.sidebar-brand .brand-mark.small.logo-mark{
+  width:38px;
+  height:38px;
+  min-width:38px;
+  border-radius:12px;
+  box-shadow:none;
+}
+.sidebar{position:fixed;overflow:hidden;}
+.sidebar::before{
+  content:"";
+  position:absolute;
+  left:18px;
+  right:18px;
+  bottom:94px;
+  height:110px;
+  background:url('ph-logo.png') center/contain no-repeat;
+  opacity:.045;
+  pointer-events:none;
+}
+.sidebar > *{position:relative;z-index:1;}
+.login-screen{
+  position:relative;
+  overflow:hidden;
+  isolation:isolate;
+}
+.login-screen::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:url('ph-logo.png') center/520px no-repeat;
+  opacity:.14;
+  pointer-events:none;
+  z-index:0;
+}
+.login-card{position:relative;z-index:1;background:rgba(255,255,255,.88);backdrop-filter:blur(4px);}
+.login-card .brand-mark.logo-mark{margin-bottom:14px;}
+@media(max-width:900px){
+  .sidebar::before{display:none;}
+}
+@media(max-width:640px){
+  .brand-mark.logo-mark{width:52px;height:52px;border-radius:14px;}
+  .sidebar-brand .brand-mark.small.logo-mark{width:34px;height:34px;min-width:34px;}
+  .login-screen::before{background-size:380px;opacity:.12;}
+}
