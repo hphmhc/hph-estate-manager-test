@@ -119,8 +119,12 @@ const HPHSupabase={
     await this.ensureReady();
     window.HPH_SUPABASE_ACTIVE=true;
     const clean=HPHStorage.normalize(data);
+    const validClientIds=new Set((clean.clients||[]).map(client=>client.id));
+    const validPlotIds=new Set((clean.plots||[]).map(plot=>plot.id));
+    const safePayments=(clean.payments||[]).filter(payment=>validClientIds.has(payment.clientId)&&validPlotIds.has(payment.plotId));
+    const safeDues=(clean.dues||[]).filter(due=>validClientIds.has(due.clientId)&&validPlotIds.has(due.plotId));
     const c=this.client;
-    for(const table of ['dues','payments','sellers','plots','clients']){
+    for(const table of ["dues","payments","sellers","plots","clients"]){
       const {error}=await c.from(table).delete().neq('id','00000000-0000-0000-0000-000000000000');
       if(error)throw error;
     }
@@ -128,8 +132,10 @@ const HPHSupabase={
     if(clean.clients.length){const {error}=await c.from('clients').insert(clean.clients.map(clientToRow));if(error)throw error;}
     if(clean.plots.length){const {error}=await c.from('plots').insert(clean.plots.map(plotToRow));if(error)throw error;}
     if(clean.sellers.length){const {error}=await c.from('sellers').insert(clean.sellers.map(sellerToRow));if(error)throw error;}
-    if(clean.payments.length){const {error}=await c.from('payments').insert(clean.payments.map(paymentToRow));if(error)throw error;}
-    if(clean.dues.length){const {error}=await c.from('dues').insert(clean.dues.map(dueToRow));if(error)throw error;}
+    if(safePayments.length){const {error}=await c.from('payments').insert(safePayments.map(paymentToRow));if(error)throw error;}
+    if(safeDues.length){const {error}=await c.from('dues').insert(safeDues.map(dueToRow));if(error)throw error;}
+    clean.payments=safePayments;
+    clean.dues=safeDues;
     return clean;
   },
   async clearBusinessData(){

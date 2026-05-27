@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>HPH Estate Manager</title>
+  <title>PH Estate Manager</title>
+  <link rel="icon" type="image/png" href="ph-logo.png" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <section id="loginView" class="login-screen hidden">
       <div class="login-card">
-        <div class="brand-mark">HPH</div>
-        <h1>HPH Estate Manager</h1>
+        <div class="brand-mark logo-mark"><img src="ph-logo.png" alt="PH logo" /></div>
+        <h1>PH Estate Manager</h1>
         <p class="muted">Real estate records, projects, clients and backups.</p>
 
         <div class="login-tabs hidden" role="tablist" aria-label="Login role">
@@ -37,8 +38,8 @@
     <section id="mainView" class="app-shell hidden">
       <aside class="sidebar">
         <div class="sidebar-brand">
-          <div class="brand-mark small">HPH</div>
-          <div><strong>HPH Estate</strong><span>Manager</span></div>
+          <div class="brand-mark small logo-mark"><img src="ph-logo.png" alt="PH logo" /></div>
+          <div><strong>PH Estate</strong><span>Manager</span></div>
         </div>
 
         <nav class="nav-list">
@@ -459,6 +460,6 @@
     </div>
 
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="storage.js"></script><script src="exports.js"></script><script src="documents.js"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script><script src="storage.js"></script><script src="exports.js"></script><script src="documents.js"></script><script src="app.js"></script>
 </body>
 </html>

@@ -1150,11 +1150,10 @@ function currentDocumentFileName(extension="doc"){
   const {plot,client}=selectedDocumentData();
   const clientName=safeFilePart(client?.nameEn||client?.nameUr||"Client");
   const plotNo=safeFilePart(plot?.plotNo||"Plot");
-  const project=safeFilePart(plot?.projectName||"");
   if(template==="receipt"){
     const payment=getSelectedDocumentPayment();
     const date=safeFilePart(payment?.date||docDateValue());
-    return `${clientName}_${plotNo}_${date}.${extension}`;
+    return `${clientName}_${date}.${extension}`;
   }
   return `${clientName}_${plotNo}.${extension}`;
 }
@@ -1416,27 +1415,51 @@ function spreadsheetCell(value){
 function worksheetXml(name,columns,rows){
   return `<Worksheet ss:Name="${xmlEscape(cleanSheetName(name))}"><Table><Row>${columns.map(c=>spreadsheetCell(c.label)).join("")}</Row>${rows.map(row=>`<Row>${columns.map(c=>spreadsheetCell(c.get(row))).join("")}</Row>`).join("")}</Table></Worksheet>`;
 }
-function downloadReport(){
-  const config=getReportConfig(); const columns=getSelectedReportColumns(config); const rows=getFilteredReportRows(config);
+async function ensureXlsxLibrary(){
+  if(window.XLSX)return true;
+  await new Promise((resolve,reject)=>{
+    const existing=document.querySelector("script[data-hph-xlsx-loader]");
+    if(existing){existing.addEventListener("load",resolve,{once:true});existing.addEventListener("error",()=>reject(new Error("Could not load XLSX library.")),{once:true});return;}
+    const script=document.createElement("script");
+    script.src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js";
+    script.setAttribute("data-hph-xlsx-loader","true");
+    script.onload=resolve;
+    script.onerror=()=>reject(new Error("Could not load XLSX library. Check internet connection or CDN access."));
+    document.head.appendChild(script);
+  });
+  return !!window.XLSX;
+}
+function reportFileBaseName(type){
+  return ({master:"PH Master File",payments:"PH Payments",dues:"PH Dues",plots:"PH Plots"})[type]||"PH Report";
+}
+async function downloadReport(){
+  const config=getReportConfig();
+  const columns=getSelectedReportColumns(config);
+  const rows=getFilteredReportRows(config);
   if(!columns.length){alert("Select at least one column before exporting.");return}
-  let worksheets="";
+  await ensureXlsxLibrary();
+  const workbook=window.XLSX.utils.book_new();
+  const addSheet=(sheetName,sheetRows)=>{
+    const jsonRows=sheetRows.map(row=>Object.fromEntries(columns.map(column=>[column.label,column.get(row)])));
+    const worksheet=window.XLSX.utils.json_to_sheet(jsonRows,{header:columns.map(column=>column.label)});
+    window.XLSX.utils.book_append_sheet(workbook,worksheet,cleanSheetName(sheetName));
+  };
   if(config.type==="plots"){
     const projectNames=[...new Set(rows.map(row=>row.plot.projectName||"No Project"))].sort((a,b)=>a.localeCompare(b));
-    worksheets=projectNames.map(project=>worksheetXml(project,columns,rows.filter(row=>(row.plot.projectName||"No Project")===project))).join("");
+    projectNames.forEach(project=>addSheet(project,rows.filter(row=>(row.plot.projectName||"No Project")===project)));
   }else{
-    worksheets=worksheetXml(config.sheetName,columns,rows);
+    addSheet(config.sheetName,rows);
   }
-  const workbook=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="11"/></Style></Styles>${worksheets}</Workbook>`;
-  const blob=new Blob([workbook],{type:"application/vnd.ms-excel;charset=utf-8"});
+  const array=window.XLSX.write(workbook,{bookType:"xlsx",type:"array"});
+  const blob=new Blob([array],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
   const date=new Date().toISOString().slice(0,10);
-  const filename=`HPH_${config.type}_report_${date}.xls`;
+  const filename=`${reportFileBaseName(config.type)} ${date}.xlsx`;
   HPHExports.downloadBlob(blob,filename);
 }
 
-
 function validateBackupPayload(payload){
   if(!payload || typeof payload!=="object")return "Backup file is not valid JSON data.";
-  if(payload.app!=="HPH Estate Manager")return "This does not look like an HPH Estate Manager backup.";
+  if(!["HPH Estate Manager","PH Estate Manager"].includes(payload.app))return "This does not look like a PH Estate Manager backup.";
   if(!payload.data || typeof payload.data!=="object")return "Backup file is missing the data section.";
   const required=["users","projects","clients","plots","sellers","payments","dues"];
   const missing=required.filter(key=>!Array.isArray(payload.data[key]));

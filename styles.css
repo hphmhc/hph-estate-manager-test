@@ -430,3 +430,9 @@ td{color:#263341;}
   .content{margin:0!important;width:100%!important;padding:0!important;}
   .document-paper{box-shadow:none!important;border:0!important;margin:0!important;max-width:none!important;}
 }
+
+
+/* Stage 15.1 branding */
+.brand-mark.logo-mark{background:#fff;color:transparent;border:1px solid var(--line);box-shadow:0 10px 24px rgba(17,24,39,.08);overflow:hidden;padding:0}
+.brand-mark.logo-mark img{width:100%;height:100%;display:block;object-fit:contain;border-radius:inherit}
+.brand-mark.small.logo-mark{box-shadow:none}
