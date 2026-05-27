@@ -1,4 +1,4 @@
-const state={data:HPHStorage.load(),currentUser:null,selectedRole:"user",activePage:"dashboard",activePaymentClientId:null,activePaymentPlotId:null,activeDueClientId:null,activeDuePlotId:null,onlineMode:false,remoteSaveTimer:null};
+const state={data:HPHStorage.load(),currentUser:null,selectedRole:"user",activePage:"dashboard",activePaymentClientId:null,activePaymentPlotId:null,activeDueClientId:null,activeDuePlotId:null,onlineMode:false,remoteSaveTimer:null,remoteSaveInFlight:false,remoteSaveQueued:false};
 const $=selector=>document.querySelector(selector);
 const $$=selector=>Array.from(document.querySelectorAll(selector));
 function uid(prefix="id"){return window.HPH_USE_SUPABASE&&window.crypto?.randomUUID?window.crypto.randomUUID():`${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`}
@@ -28,13 +28,39 @@ function clientAggregate(client){const plots=getClientPlots(client.id);if(!plots
 const sorted=sortPlotsList(plots);const total=sorted.reduce((sum,p)=>sum+Number(p.price||0),0);const received=sorted.reduce((sum,p)=>sum+Number(p.amountReceived||0),0);const remaining=Math.max(0,total-received);return {plots:sorted,plotLabels:sorted.map(p=>p.plotNo).filter(Boolean),projectLabels:[...new Set(sorted.map(p=>p.projectName).filter(Boolean))],sizeLabels:[...new Set(sorted.map(p=>`${p.plotSizeMarla||0} marla`))],typeLabels:[...new Set(sorted.map(p=>p.propertyType).filter(Boolean))],constructionStatuses:[...new Set(sorted.map(p=>p.constructionStatus).filter(Boolean))],paymentStatuses:[...new Set(sorted.map(p=>normalizePaymentStatus(p.paymentStatus)).filter(Boolean))],total,received,remaining}}
 function aggregatePaymentStatusLabel(statuses){const unique=[...new Set((statuses||[]).map(normalizePaymentStatus))];if(!unique.length)return "-";if(unique.length===1)return paymentStatusLabel(unique[0]);return unique.map(paymentStatusLabel).join(" / ")}
 function aggregateConstructionStatusLabel(statuses){const unique=[...new Set((statuses||[]).filter(Boolean))];if(!unique.length)return "-";if(unique.length===1)return constructionStatusLabel(unique[0]);return unique.map(constructionStatusLabel).join(" / ")}
+function userFriendlySyncError(error){
+  const message=String(error?.message||error||"");
+  if(message.includes("foreign key constraint")){
+    return "Online save was blocked because one linked client or plot was missing from the database. Please refresh the app and try again.";
+  }
+  if(message.includes("Failed to fetch")||message.includes("NetworkError")){
+    return "Online save failed because the database could not be reached. Check your internet connection and try again.";
+  }
+  return "Online database sync failed: "+message;
+}
+async function runRemoteSave(){
+  if(state.remoteSaveInFlight){state.remoteSaveQueued=true;return;}
+  state.remoteSaveInFlight=true;
+  try{
+    const latest=structuredClone(state.data);
+    state.data=await HPHSupabase.saveAll(latest);
+    HPHStorage.save(state.data);
+    console.log("Supabase sync complete");
+  }catch(error){
+    console.error("Supabase sync failed",error);
+    alert(userFriendlySyncError(error));
+  }finally{
+    state.remoteSaveInFlight=false;
+    if(state.remoteSaveQueued){
+      state.remoteSaveQueued=false;
+      runRemoteSave();
+    }
+  }
+}
 function scheduleRemoteSave(){
   if(!state.onlineMode||!window.HPHSupabase?.ready)return;
   clearTimeout(state.remoteSaveTimer);
-  state.remoteSaveTimer=setTimeout(async()=>{
-    try{await HPHSupabase.saveAll(state.data);console.log("Supabase sync complete");}
-    catch(error){console.error("Supabase sync failed",error);alert("Online database sync failed: "+(error.message||error));}
-  },700);
+  state.remoteSaveTimer=setTimeout(runRemoteSave,700);
 }
 function saveData(){state.data=HPHStorage.save(state.data);scheduleRemoteSave()}
 function saveSession(){
@@ -502,7 +528,11 @@ function savePayment(event){
   event.preventDefault();
   const client=state.data.clients.find(c=>c.id===state.activePaymentClientId);
   const plot=state.data.plots.find(p=>p.id===state.activePaymentPlotId);
-  if(!client||!plot){alert("Client or plot not found.");return}
+  if(!client||!plot){alert("Client or plot not found. Refresh the app and try again before adding this payment.");return}
+  if(state.onlineMode){
+    if(!client.id||!plot.id){alert("This payment cannot be saved until the client and plot are saved online. Refresh the app and try again.");return}
+    if(plot.linkedClientId && plot.linkedClientId!==client.id){alert("This plot is not linked to the selected client. Refresh the app before adding payment.");return}
+  }
   const type=$("#paymentType").value||"cash";
   const amount=parseMoney($("#paymentAmount").value);
   if(!amount){alert("Enter the payment amount or exchange value.");return}
@@ -1430,7 +1460,7 @@ async function ensureXlsxLibrary(){
   return !!window.XLSX;
 }
 function reportFileBaseName(type){
-  return ({master:"PH Master File",payments:"PH Payments",dues:"PH Dues",plots:"PH Plots"})[type]||"PH Report";
+  return ({master:"PH_Master_File",payments:"PH_Payments_Report",dues:"PH_Dues_Report",plots:"PH_Plots_Report"})[type]||"PH_Report";
 }
 async function downloadReport(){
   const config=getReportConfig();
@@ -1453,7 +1483,7 @@ async function downloadReport(){
   const array=window.XLSX.write(workbook,{bookType:"xlsx",type:"array"});
   const blob=new Blob([array],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
   const date=new Date().toISOString().slice(0,10);
-  const filename=`${reportFileBaseName(config.type)} ${date}.xlsx`;
+  const filename=`${reportFileBaseName(config.type)}_${date}.xlsx`;
   HPHExports.downloadBlob(blob,filename);
 }
 
